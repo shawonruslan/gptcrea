@@ -21,27 +21,19 @@ function generateRandomString(length) {
 
 async function createNewSession() {
     console.log('\n--- Creating New Browser Session and Registering New Account ---');
-    const browser = await chromium.launch({ headless: true });
     
-    const context = await browser.newContext({
-        viewport: { width: 1280, height: 800 },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        recordVideo: {
-            dir: 'wallpapers/',
-            size: { width: 1280, height: 800 }
-        }
+    // Launch a separate browser for mailwave to avoid session fingerprint association and background tab throttling
+    console.log('Launching separate browser process for mailwave.dev...');
+    const mailwaveBrowser = await chromium.launch({ headless: true });
+    const mailwaveContext = await mailwaveBrowser.newContext({
+        viewport: { width: 1280, height: 800 }
     });
-
-    const page = await context.newPage();
-    const mailwavePage = await context.newPage(); // Open temp mail in a second tab
-    
-    page.setDefaultTimeout(0);
-    page.setDefaultNavigationTimeout(0);
+    const mailwavePage = await mailwaveContext.newPage();
     mailwavePage.setDefaultTimeout(0);
     mailwavePage.setDefaultNavigationTimeout(0);
 
+    let email = '';
     try {
-        // Step 1: Generate disposable email address
         console.log('Navigating to mailwave.dev to generate temp email...');
         await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 0 });
         
@@ -49,7 +41,6 @@ async function createNewSession() {
         const emailInput = mailwavePage.locator('input#mainEmail');
         await emailInput.waitFor({ state: 'visible', timeout: 0 });
         
-        let email = '';
         for (let attempt = 1; attempt <= 30; attempt++) {
             email = await emailInput.inputValue();
             if (email && email !== 'landing' && email.includes('@')) {
@@ -61,10 +52,29 @@ async function createNewSession() {
         if (!email || email === 'landing') {
             throw new Error('Failed to generate email on mailwave.dev');
         }
-        
         console.log(`Successfully generated email: ${email}`);
+    } catch (err) {
+        await mailwaveBrowser.close().catch(() => {});
+        throw err;
+    }
 
-        // Step 2: Register on ChatGPT
+    // Now launch the main ChatGPT browser
+    console.log('Launching main browser process for ChatGPT...');
+    const browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        recordVideo: {
+            dir: 'wallpapers/',
+            size: { width: 1280, height: 800 }
+        }
+    });
+
+    const page = await context.newPage();
+    page.setDefaultTimeout(0);
+    page.setDefaultNavigationTimeout(0);
+
+    try {
         console.log('Navigating to ChatGPT...');
         await page.goto('https://chatgpt.com/', { waitUntil: 'load', timeout: 0 });
 
@@ -91,8 +101,8 @@ async function createNewSession() {
         const codeInput = page.locator('input[name="code"], input[placeholder="Code"], input[id$="-code"]');
         await codeInput.waitFor({ state: 'visible', timeout: 0 });
 
-        // Step 3: Fetch verification code from mailwavePage
-        console.log('Switching to mailwave.dev tab to wait for OTP...');
+        // Retrieve OTP using the mailwave browser
+        console.log('Checking mailwave.dev for OTP...');
         const mailboxItem = mailwavePage.locator('#mailbox .mailbox-item');
         
         let emailArrived = false;
@@ -117,7 +127,6 @@ async function createNewSession() {
         await mailboxItem.first().click();
         await mailwavePage.waitForTimeout(3000);
 
-        // Step 4: Extract OTP from the page body
         console.log('Extracting OTP code...');
         const bodyText = await mailwavePage.locator('body').textContent();
         const otpMatch = bodyText.match(/\b\d{6}\b/);
@@ -128,16 +137,34 @@ async function createNewSession() {
         const otp = otpMatch[0];
         console.log(`Successfully retrieved OTP: ${otp}`);
 
-        // Step 5: Fill in OTP and complete ChatGPT setup
-        console.log('Switching back to ChatGPT and typing OTP code...');
+        // Close the mailwave browser as we are done with it
+        await mailwaveBrowser.close().catch(() => {});
+
+        // Bring the ChatGPT page to the front to ensure it is focused and not throttled
+        console.log('Bringing ChatGPT tab to front...');
+        await page.bringToFront();
+        await page.waitForTimeout(1000);
+
+        // Fill in OTP on ChatGPT
+        console.log(`Entering OTP code: ${otp} on ChatGPT...`);
+        await codeInput.focus();
         await codeInput.fill(otp);
 
-        const submitBtn = page.locator('button[type="submit"][value="validate"], button:has-text("Continue")');
-        await submitBtn.click();
+        // Wait a brief moment to see if it submits automatically and navigates
+        await page.waitForTimeout(3000);
+
+        // If nameInput is not visible yet, try to find and click the submit button
+        const nameInput = page.locator('input[name="name"], input[placeholder="Full name"]');
+        if (await nameInput.count() === 0 || !(await nameInput.isVisible())) {
+            console.log('Form did not auto-submit. Locating and clicking submit/continue button...');
+            const submitBtn = page.locator('button[type="submit"][value="validate"], button:has-text("Continue")');
+            if (await submitBtn.count() > 0 && await submitBtn.isVisible()) {
+                await submitBtn.click().catch(err => console.log('Submit button click ignored:', err.message));
+            }
+        }
 
         // Wait for profile setup form (About You) page
         console.log('Waiting for Profile Setup (About You) page to load...');
-        const nameInput = page.locator('input[name="name"], input[placeholder="Full name"]');
         await nameInput.waitFor({ state: 'visible', timeout: 0 });
 
         console.log('Filling Profile Info (Name & Age)...');
@@ -154,10 +181,8 @@ async function createNewSession() {
         console.log('Waiting for redirect back to ChatGPT...');
         await page.waitForURL('**/chatgpt.com/**', { waitUntil: 'domcontentloaded', timeout: 0 });
 
-        // Wait a brief moment to let welcome popups render
         await page.waitForTimeout(5000);
 
-        // Check if "You're all set" popup or dialog exists
         const allSetBtn = page.locator('button.btn-primary:has-text("Continue"), button:has-text("Continue")');
         if (await allSetBtn.count() > 0) {
             console.log('"You\'re all set" button found. Clicking it...');
@@ -165,12 +190,8 @@ async function createNewSession() {
             await page.waitForTimeout(2000);
         }
 
-        // Close the temp mail tab as we are successfully signed up
-        await mailwavePage.close().catch(() => {});
-
         console.log('New account session successfully created and logged in.');
 
-        // Append email to emails.txt in the root directory
         const emailsFilePath = path.join(__dirname, 'emails.txt');
         fs.appendFileSync(emailsFilePath, `${email}\n`, 'utf8');
         console.log(`Saved registered email: ${email} to ${emailsFilePath}`);
@@ -181,7 +202,8 @@ async function createNewSession() {
         console.error('An error occurred during account creation:', error);
         await page.screenshot({ path: 'wallpapers/error_signup.png', fullPage: true });
         const video = page.video();
-        await browser.close();
+        await browser.close().catch(() => {});
+        await mailwaveBrowser.close().catch(() => {});
         if (video) {
             const videoPath = await video.path().catch(() => null);
             if (videoPath && fs.existsSync(videoPath)) {
@@ -232,7 +254,7 @@ async function createNewSession() {
                 console.log('Reached 5 generations limit on this account. Closing browser and rotating account...');
                 const page = currentSession.page;
                 const video = page.video();
-                await currentSession.browser.close();
+                await currentSession.browser.close().catch(() => {});
                 if (video) {
                     const videoPath = await video.path().catch(() => null);
                     if (videoPath && fs.existsSync(videoPath)) {
@@ -320,7 +342,7 @@ async function createNewSession() {
     if (currentSession) {
         const page = currentSession.page;
         const video = page.video();
-        await currentSession.browser.close();
+        await currentSession.browser.close().catch(() => {});
         if (video) {
             const videoPath = await video.path().catch(() => null);
             if (videoPath && fs.existsSync(videoPath)) {
