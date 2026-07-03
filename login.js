@@ -21,94 +21,93 @@ function generateRandomString(length) {
     return result;
 }
 
-// Snapshot the highest UID currently in the inbox BEFORE we trigger registration.
-// This lets getOTP ignore all pre-existing emails and only look at brand-new arrivals.
-async function getMaxUID(imapClient) {
-    const lock = await imapClient.getMailboxLock('INBOX');
-    try {
-        const status = await imapClient.status('INBOX', { uidNext: true });
-        // uidNext is the UID that will be assigned to the NEXT incoming email,
-        // so the current max UID is uidNext - 1.
-        return (status.uidNext || 1) - 1;
-    } finally {
-        lock.release();
-    }
-}
-
-async function getOTP(targetEmail, sinceUid) {
+async function getOTP(targetEmail) {
     if (!process.env.GMAIL_APP_PASSWORD) {
         throw new Error('GMAIL_APP_PASSWORD environment variable is not set!');
     }
 
-    const client = new ImapFlow({
-        host: 'imap.gmail.com',
-        port: 993,
-        secure: true,
-        auth: {
-            user: 'holaexplainer@gmail.com',
-            pass: process.env.GMAIL_APP_PASSWORD
-        },
-        logger: false
-    });
+    // Try up to 30 attempts, checking every 5 seconds (2.5 minutes total)
+    for (let attempt = 1; attempt <= 30; attempt++) {
+        console.log(`Checking inbox for OTP (Attempt ${attempt}/30)...`);
 
-    await client.connect();
-    console.log('Connected to Gmail IMAP server successfully.');
-    console.log(`Waiting for new OTP email with UID > ${sinceUid} for: ${targetEmail}`);
+        const client = new ImapFlow({
+            host: 'imap.gmail.com',
+            port: 993,
+            secure: true,
+            auth: {
+                user: 'holaexplainer@gmail.com',
+                pass: process.env.GMAIL_APP_PASSWORD
+            },
+            logger: false
+        });
 
-    try {
-        // Try up to 30 attempts, checking every 5 seconds (2.5 minutes total)
-        for (let attempt = 1; attempt <= 30; attempt++) {
-            console.log(`Checking inbox for OTP (Attempt ${attempt}/30)...`);
+        try {
+            await client.connect();
             
-            const lock = await client.getMailboxLock('INBOX');
+            // Lock mailbox to ensure state is synchronized and fresh
+            let lock = await client.getMailboxLock('INBOX');
             try {
-                // IMPORTANT: Pass { uid: true } so search() returns real UIDs,
-                // not sequence numbers. Without this, the uid range and fetchOne
-                // both operate on sequence numbers which are completely different values.
-                const uids = await client.search({
-                    subject: 'ChatGPT verification',
-                    uid: `${sinceUid + 1}:*`   // only UIDs newer than our snapshot
-                }, { uid: true });
+                // Broad search by subject. Gmail returns UIDs in ascending order (oldest to newest)
+                let uids = await client.search({
+                    subject: 'ChatGPT'
+                });
 
-                console.log(`Found ${uids.length} new ChatGPT email(s) since UID ${sinceUid}.`);
+                console.log(`Found ${uids.length} email(s) with 'ChatGPT' in the subject.`);
 
                 if (uids && uids.length > 0) {
-                    // Newest email is last in the list
-                    for (let i = uids.length - 1; i >= 0; i--) {
-                        const uid = uids[i];
+                    const uid = uids[uids.length - 1];
+                    const msg = await client.fetchOne(uid, { source: true });
+                    
+                    // Parse raw email structure
+                    const parsed = await simpleParser(msg.source);
+                    const text = parsed.text || '';
+                    const html = parsed.html || '';
+                    
+                    // Extract recipient details
+                    const toText = (parsed.to && parsed.to.text) ? parsed.to.text.toLowerCase() : '';
+                    const parsedEmails = parsed.to && parsed.to.value 
+                        ? parsed.to.value.map(val => (val.address || '').toLowerCase()) 
+                        : [];
 
-                        // Fetch by UID, not sequence number
-                        const msg = await client.fetchOne(uid, { source: true }, { uid: true });
-                        const parsed = await simpleParser(msg.source);
-                        const text = parsed.text || '';
-                        const html = parsed.html || '';
+                    console.log(`Checking newest UID: ${uid} | Recipient Header: "${toText}"`);
 
-                        console.log(`Checking UID: ${uid} | Subject: "${parsed.subject}"`);
+                    // Verify if target email is the recipient
+                    const isMatch = toText.includes(targetEmail.toLowerCase()) || 
+                                    parsedEmails.includes(targetEmail.toLowerCase()) || 
+                                    text.includes(targetEmail) ||
+                                    html.includes(targetEmail);
 
-                        // Extract 6-digit OTP
+                    if (isMatch) {
+                        // Find 6-digit OTP code
                         const otpRegex = /\b\d{6}\b/;
-                        const match = text.match(otpRegex) || html.match(otpRegex);
+                        let match = text.match(otpRegex);
+                        if (!match) {
+                            match = html.match(otpRegex);
+                        }
 
                         if (match) {
-                            console.log(`Found OTP: ${match[0]} for ${targetEmail}`);
-                            return match[0];
+                            const otp = match[0];
+                            console.log(`Found OTP: ${otp} for ${targetEmail}`);
+                            return otp;
                         } else {
-                            console.log(`No 6-digit code found in UID: ${uid}.`);
+                            console.log(`Could not extract a 6-digit OTP code from message UID: ${uid}.`);
                         }
                     }
                 }
             } finally {
+                // Release lock on INBOX
                 lock.release();
             }
-
-            // Wait 5 seconds before checking again
-            await new Promise(resolve => setTimeout(resolve, 5000));
+        } catch (err) {
+            console.error(`IMAP connection/search error on attempt ${attempt}:`, err);
+        } finally {
+            await client.logout().catch(() => {});
         }
-        throw new Error(`OTP email not found for ${targetEmail} after 30 attempts.`);
-    } finally {
-        await client.logout();
-        console.log('Logged out of Gmail IMAP server.');
+
+        // Wait 5 seconds before checking again
+        await new Promise(resolve => setTimeout(resolve, 5000));
     }
+    throw new Error(`OTP email not found for ${targetEmail} after 30 attempts.`);
 }
 
 async function createNewSession() {
@@ -139,22 +138,6 @@ async function createNewSession() {
         const email = `holaexplainer+${randomString}@gmail.com`;
         console.log(`Registering account with email: ${email}`);
 
-        // Snapshot inbox BEFORE submitting the email — the OTP can arrive within
-        // milliseconds of clicking Continue, so we must record the current max UID
-        // before we trigger the registration email to guarantee we never miss it.
-        console.log('Snapshotting inbox max UID before submitting email...');
-        const snapshotClient = new ImapFlow({
-            host: 'imap.gmail.com',
-            port: 993,
-            secure: true,
-            auth: { user: 'holaexplainer@gmail.com', pass: process.env.GMAIL_APP_PASSWORD },
-            logger: false
-        });
-        await snapshotClient.connect();
-        const sinceUid = await getMaxUID(snapshotClient);
-        await snapshotClient.logout();
-        console.log(`Inbox snapshot UID: ${sinceUid}. Any OTP email with UID > ${sinceUid} is new.`);
-
         await emailInput.fill(email);
         await emailInput.press('Enter');
 
@@ -170,9 +153,9 @@ async function createNewSession() {
         const codeInput = page.locator('input[name="code"], input[placeholder="Code"], input[id$="-code"]');
         await codeInput.waitFor({ state: 'visible', timeout: 0 });
 
-        // Get OTP — only look at emails newer than our snapshot
-        console.log(`Fetching OTP for ${email}...`);
-        const otp = await getOTP(email, sinceUid);
+        // Get OTP from Gmail inbox
+        console.log(`Starting fetching OTP for ${email}...`);
+        const otp = await getOTP(email);
         console.log(`Successfully retrieved OTP: ${otp}`);
 
         // Enter OTP code
