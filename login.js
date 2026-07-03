@@ -2,6 +2,7 @@ const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
+const fs = require('fs');
 
 chromium.use(stealth);
 
@@ -217,9 +218,58 @@ async function getOTP(targetEmail) {
             await page.waitForTimeout(2000);
         }
 
-        // Screenshot 7: Final page
+        // Screenshot 7: Dashboard page
         await page.screenshot({ path: 'screenshots/7_final_page.png', fullPage: true });
-        console.log('Process completed. Screenshot of the final page captured.');
+        console.log('Final page reached. Locating prompt input text area (#prompt-textarea)...');
+
+        const promptArea = page.locator('#prompt-textarea');
+        await promptArea.waitFor({ state: 'visible', timeout: 0 });
+
+        console.log('Focusing and typing the image prompt...');
+        await promptArea.click();
+        
+        // Type the prompt simulating keypresses
+        await page.keyboard.type('Create image a wallpaper 9:16 ratio');
+        await page.waitForTimeout(2000);
+
+        // Screenshot 8: Prompt typed
+        await page.screenshot({ path: 'screenshots/8_prompt_typed.png' });
+
+        console.log('Locating send button...');
+        const sendBtn = page.locator('[data-testid="send-button"], #composer-submit-button');
+        await sendBtn.waitFor({ state: 'visible', timeout: 0 });
+
+        console.log('Clicking the send button...');
+        await sendBtn.click();
+
+        console.log('Waiting for image generation to complete (this might take 30-60 seconds)...');
+        // Wait for the generated image element to be visible
+        const generatedImg = page.locator('img[alt^="Generated image:"], [data-testid^="conversation-turn-"] img[src*="backend-api/estuary/content"]');
+        await generatedImg.waitFor({ state: 'visible', timeout: 0 });
+
+        console.log('Image generation complete! Waiting for loading transition...');
+        await page.waitForTimeout(2000);
+
+        // Screenshot 9: Final response screen with the wallpaper visible
+        await page.screenshot({ path: 'screenshots/9_final_result.png', fullPage: true });
+        console.log('Final conversation screenshot captured.');
+
+        // Get the image URL (src)
+        const imgSrc = await generatedImg.first().getAttribute('src');
+        if (imgSrc) {
+            console.log(`Downloading generated wallpaper from: ${imgSrc}`);
+            // Use page.request.get to download using the page's cookies and headers
+            const response = await page.request.get(imgSrc);
+            if (response.ok()) {
+                const buffer = await response.body();
+                fs.writeFileSync('screenshots/wallpaper.png', buffer);
+                console.log('Wallpaper successfully saved to screenshots/wallpaper.png');
+            } else {
+                console.error(`Failed to download wallpaper. Status: ${response.status()}`);
+            }
+        } else {
+            console.error('Could not retrieve image source URL.');
+        }
 
     } catch (error) {
         console.error('An error occurred during flow execution:', error);
