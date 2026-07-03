@@ -157,9 +157,18 @@ async function getOTP(targetEmail) {
         console.log('Pressing Enter/Submit...');
         await emailInput.press('Enter');
 
-        console.log('Waiting for redirection to verification page...');
-        await page.waitForURL('**/email-verification**', { waitUntil: 'load', timeout: 0 });
-        console.log('Redirected to verification page:', page.url());
+        // Fallback: If still on the same page after 2 seconds, click the Continue button directly
+        await page.waitForTimeout(2000);
+        const continueBtn = page.locator('button[type="submit"]:has-text("Continue"), button:has-text("Continue")');
+        if (await continueBtn.count() > 0 && await continueBtn.isVisible()) {
+            console.log('Clicking the Continue button directly...');
+            await continueBtn.click();
+        }
+
+        console.log('Waiting for redirection to verification page (waiting for code input to become visible)...');
+        const codeInput = page.locator('input[name="code"], input[placeholder="Code"], input[id$="-code"]');
+        await codeInput.waitFor({ state: 'visible', timeout: 0 });
+        console.log('Redirected to verification page successfully. Current URL:', page.url());
 
         // Screenshot 3: Verification Page
         await page.screenshot({ path: 'screenshots/3_verification_page.png', fullPage: true });
@@ -171,8 +180,6 @@ async function getOTP(targetEmail) {
 
         // Enter OTP code
         console.log('Typing OTP code...');
-        const codeInput = page.locator('input[name="code"], input[placeholder="Code"], input[id$="-code"]');
-        await codeInput.waitFor({ state: 'visible', timeout: 0 });
         await codeInput.fill(otp);
 
         // Screenshot 4: OTP Entered
@@ -205,7 +212,7 @@ async function getOTP(targetEmail) {
         await finishBtn.click();
 
         console.log('Waiting for redirect back to ChatGPT...');
-        await page.waitForURL('**/chatgpt.com/**', { waitUntil: 'load', timeout: 0 });
+        await page.waitForURL('**/chatgpt.com/**', { waitUntil: 'domcontentloaded', timeout: 0 });
 
         // Wait a brief moment to let any welcome popup render
         await page.waitForTimeout(5000);
