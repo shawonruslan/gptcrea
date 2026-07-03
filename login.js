@@ -3,8 +3,14 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const fs = require('fs');
+const path = require('path');
 
 chromium.use(stealth);
+
+// Ensure the wallpapers directory exists
+if (!fs.existsSync('wallpapers')) {
+    fs.mkdirSync('wallpapers');
+}
 
 function generateRandomString(length) {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -119,22 +125,16 @@ async function getOTP(targetEmail) {
     }
 }
 
-(async () => {
-    // Check for credentials first
-    if (!process.env.GMAIL_APP_PASSWORD) {
-        console.error('ERROR: GMAIL_APP_PASSWORD environment variable is not defined.');
-        process.exit(1);
-    }
-
+async function createNewSession() {
+    console.log('\n--- Creating New Browser Session and Registering New Account ---');
     const browser = await chromium.launch({ headless: true });
+    
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     });
 
     const page = await context.newPage();
-
-    // Disable all default timeouts to handle slow internet speeds
     page.setDefaultTimeout(0);
     page.setDefaultNavigationTimeout(0);
 
@@ -143,30 +143,17 @@ async function getOTP(targetEmail) {
         await page.goto('https://chatgpt.com/', { waitUntil: 'load', timeout: 0 });
 
         const loginBtn = page.locator('[data-testid="login-button"]');
-        console.log('Waiting for login button...');
         await loginBtn.waitFor({ state: 'visible', timeout: 0 });
-
-        // Screenshot 1: Homepage
-        await page.screenshot({ path: 'screenshots/1_homepage.png' });
-
-        console.log('Clicking login button...');
         await loginBtn.click();
 
-        console.log('Waiting for login form/email input...');
         const emailInput = page.locator('input#email');
         await emailInput.waitFor({ state: 'visible', timeout: 0 });
 
-        // Generate customized email alias
         const randomString = generateRandomString(6);
         const email = `holaexplainer+${randomString}@gmail.com`;
-        console.log(`Generated email: ${email}`);
+        console.log(`Registering account with email: ${email}`);
 
         await emailInput.fill(email);
-
-        // Screenshot 2: Email Filled
-        await page.screenshot({ path: 'screenshots/2_email_filled.png' });
-
-        console.log('Pressing Enter/Submit...');
         await emailInput.press('Enter');
 
         // Fallback: If still on the same page after 2 seconds, click the Continue button directly
@@ -177,13 +164,9 @@ async function getOTP(targetEmail) {
             await continueBtn.click();
         }
 
-        console.log('Waiting for redirection to verification page (waiting for code input to become visible)...');
+        console.log('Waiting for verification page (waiting for code input)...');
         const codeInput = page.locator('input[name="code"], input[placeholder="Code"], input[id$="-code"]');
         await codeInput.waitFor({ state: 'visible', timeout: 0 });
-        console.log('Redirected to verification page successfully. Current URL:', page.url());
-
-        // Screenshot 3: Verification Page
-        await page.screenshot({ path: 'screenshots/3_verification_page.png', fullPage: true });
 
         // Get OTP from Gmail inbox
         console.log(`Starting fetching OTP for ${email}...`);
@@ -194,10 +177,6 @@ async function getOTP(targetEmail) {
         console.log('Typing OTP code...');
         await codeInput.fill(otp);
 
-        // Screenshot 4: OTP Entered
-        await page.screenshot({ path: 'screenshots/4_otp_entered.png' });
-
-        console.log('Submitting OTP code...');
         const submitBtn = page.locator('button[type="submit"][value="validate"], button:has-text("Continue")');
         await submitBtn.click();
 
@@ -206,18 +185,12 @@ async function getOTP(targetEmail) {
         const nameInput = page.locator('input[name="name"], input[placeholder="Full name"]');
         await nameInput.waitFor({ state: 'visible', timeout: 0 });
 
-        // Screenshot 5: Profile Page
-        await page.screenshot({ path: 'screenshots/5_profile_page.png' });
-
         console.log('Filling Profile Info (Name & Age)...');
         await nameInput.fill('jahid hasan');
 
         const ageInput = page.locator('input[name="age"], input[placeholder="Age"]');
         await ageInput.waitFor({ state: 'visible', timeout: 0 });
         await ageInput.fill('30');
-
-        // Screenshot 6: Profile Filled
-        await page.screenshot({ path: 'screenshots/6_profile_filled.png' });
 
         console.log('Submitting Profile Info...');
         const finishBtn = page.locator('button[type="submit"]:has-text("Finish creating account"), button:has-text("Finish creating account")');
@@ -237,76 +210,142 @@ async function getOTP(targetEmail) {
             await page.waitForTimeout(2000);
         }
 
-        // Screenshot 7: Dashboard page
-        await page.screenshot({ path: 'screenshots/7_final_page.png', fullPage: true });
-        console.log('Final page reached. Locating prompt input text area (#prompt-textarea)...');
+        console.log('New account session successfully created and logged in.');
 
-        const promptArea = page.locator('#prompt-textarea');
-        await promptArea.waitFor({ state: 'visible', timeout: 0 });
+        // Append email to emails.txt in the root directory
+        const emailsFilePath = path.join(__dirname, 'emails.txt');
+        fs.appendFileSync(emailsFilePath, `${email}\n`, 'utf8');
+        console.log(`Saved registered email: ${email} to ${emailsFilePath}`);
 
-        console.log('Focusing and typing the image prompt...');
-        await promptArea.click();
-        
-        // Type the prompt simulating keypresses
-        await page.keyboard.type('Create image a wallpaper 9:16 ratio');
-        await page.waitForTimeout(2000);
-
-        // Screenshot 8: Prompt typed
-        await page.screenshot({ path: 'screenshots/8_prompt_typed.png' });
-
-        console.log('Locating send button...');
-        const sendBtn = page.locator('[data-testid="send-button"], #composer-submit-button');
-        await sendBtn.waitFor({ state: 'visible', timeout: 0 });
-
-        console.log('Clicking the send button...');
-        await sendBtn.click();
-
-        console.log('Waiting for image generation to complete (waiting for Share button to appear)...');
-        // Wait for the Share button overlay of the generated image to be visible
-        const shareBtn = page.locator('button[aria-label="Share this image"]').first();
-        await shareBtn.waitFor({ state: 'visible', timeout: 0 });
-
-        console.log('Image generation complete! Waiting 2 seconds for transition...');
-        await page.waitForTimeout(2000);
-
-        // Screenshot 9: Final response screen with the wallpaper visible
-        await page.screenshot({ path: 'screenshots/9_final_result.png', fullPage: true });
-        console.log('Final conversation screenshot captured.');
-
-        console.log('Hovering over image container and clicking the Share button...');
-        const imageContainer = page.locator('.group\\/imagegen-image').first();
-        if (await imageContainer.count() > 0) {
-            await imageContainer.hover().catch(() => {});
-        }
-        await shareBtn.click();
-
-        console.log('Waiting for share modal to open (waiting for Download button)...');
-        const downloadBtn = page.locator('button:has-text("Download")').first();
-        await downloadBtn.waitFor({ state: 'visible', timeout: 0 });
-
-        // Screenshot 10: Share modal open
-        await page.screenshot({ path: 'screenshots/10_share_modal.png' });
-
-        console.log('Clicking the download button inside the share modal...');
-        // Start waiting for the download event from the browser
-        const downloadPromise = page.waitForEvent('download');
-        await downloadBtn.click();
-        const download = await downloadPromise;
-
-        // Save the download to screenshots/wallpaper.png
-        await download.saveAs('screenshots/wallpaper.png');
-        console.log('Wallpaper successfully downloaded and saved to screenshots/wallpaper.png!');
-
-        // Close the modal
-        const closeBtn = page.locator('button[data-testid="close-button"]').first();
-        if (await closeBtn.count() > 0) {
-            await closeBtn.click().catch(() => {});
-        }
+        return { browser, page };
 
     } catch (error) {
-        console.error('An error occurred during flow execution:', error);
-        await page.screenshot({ path: 'screenshots/error.png', fullPage: true });
-    } finally {
+        console.error('An error occurred during account creation:', error);
+        await page.screenshot({ path: 'wallpapers/error_signup.png', fullPage: true });
         await browser.close();
+        throw error;
+    }
+}
+
+(async () => {
+    // Check credentials first
+    if (!process.env.GMAIL_APP_PASSWORD) {
+        console.error('ERROR: GMAIL_APP_PASSWORD environment variable is not defined.');
+        process.exit(1);
+    }
+
+    // Read prompts from prompts.txt
+    let prompts = [];
+    const promptsPath = path.join(__dirname, 'prompts.txt');
+    if (fs.existsSync(promptsPath)) {
+        prompts = fs.readFileSync(promptsPath, 'utf8')
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+        console.log(`Loaded ${prompts.length} prompt(s) from prompts.txt.`);
+    }
+
+    if (prompts.length === 0) {
+        console.log('No prompts found in prompts.txt. Using default prompts...');
+        prompts = [
+            'Create image a wallpaper 9:16 ratio of a serene mountain sunrise',
+            'Create image a wallpaper 9:16 ratio of a neon cyberpunk city street',
+            'Create image a wallpaper 9:16 ratio of a futuristic spaceship in orbit'
+        ];
+    }
+
+    let currentSession = null;
+    let generationsOnCurrentAccount = 0;
+
+    for (let i = 0; i < prompts.length; i++) {
+        const prompt = prompts[i];
+        console.log(`\n======================================================`);
+        console.log(`Processing Prompt ${i + 1}/${prompts.length}`);
+        console.log(`Prompt: "${prompt}"`);
+        console.log(`======================================================`);
+
+        // Rotate browser session / account if generations reach limit of 5
+        if (!currentSession || generationsOnCurrentAccount >= 5) {
+            if (currentSession) {
+                console.log('Reached 5 generations limit on this account. Closing browser and rotating account...');
+                await currentSession.browser.close();
+            }
+            try {
+                currentSession = await createNewSession();
+                generationsOnCurrentAccount = 0;
+            } catch (err) {
+                console.error('Failed to rotate account session. Retrying in 10 seconds...');
+                await new Promise(res => setTimeout(res, 10000));
+                i--; // Retry this prompt in the next iteration
+                continue;
+            }
+        }
+
+        const page = currentSession.page;
+
+        try {
+            console.log('Resetting interface to start a fresh chat session...');
+            await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 0 });
+
+            console.log('Locating prompt input text area (#prompt-textarea)...');
+            const promptArea = page.locator('#prompt-textarea');
+            await promptArea.waitFor({ state: 'visible', timeout: 0 });
+
+            console.log('Focusing and typing the image prompt...');
+            await promptArea.click();
+            await page.keyboard.type(prompt);
+            await page.waitForTimeout(1000);
+
+            console.log('Locating send button...');
+            const sendBtn = page.locator('[data-testid="send-button"], #composer-submit-button');
+            await sendBtn.waitFor({ state: 'visible', timeout: 0 });
+
+            console.log('Clicking the send button...');
+            await sendBtn.click();
+
+            console.log('Waiting for image generation to complete (waiting for Share button)...');
+            const shareBtn = page.locator('button[aria-label="Share this image"]').first();
+            await shareBtn.waitFor({ state: 'visible', timeout: 0 });
+
+            console.log('Image generated successfully. Hovering and clicking Share...');
+            const imageContainer = page.locator('.group\\/imagegen-image').first();
+            if (await imageContainer.count() > 0) {
+                await imageContainer.hover().catch(() => {});
+            }
+            await shareBtn.click();
+
+            console.log('Waiting for share modal to load...');
+            const downloadBtn = page.locator('button:has-text("Download")').first();
+            await downloadBtn.waitFor({ state: 'visible', timeout: 0 });
+
+            console.log('Interceptors ready. Clicking the download button inside the share modal...');
+            const downloadPromise = page.waitForEvent('download');
+            await downloadBtn.click();
+            const download = await downloadPromise;
+
+            // Save the download file
+            const fileIndex = i + 1;
+            const filePath = path.join('wallpapers', `wallpaper_${fileIndex}.png`);
+            await download.saveAs(filePath);
+            console.log(`Wallpaper successfully downloaded and saved to: ${filePath}`);
+
+            // Close the share modal
+            const closeBtn = page.locator('button[data-testid="close-button"]').first();
+            if (await closeBtn.count() > 0) {
+                await closeBtn.click().catch(() => {});
+            }
+
+            generationsOnCurrentAccount++;
+            console.log(`Generations on current account: ${generationsOnCurrentAccount}/5`);
+
+        } catch (error) {
+            console.error(`Error processing prompt ${i + 1}:`, error);
+            await page.screenshot({ path: `wallpapers/error_prompt_${i + 1}.png`, fullPage: true });
+        }
+    }
+
+    if (currentSession) {
+        await currentSession.browser.close();
+        console.log('\nAll prompts processed. Browser closed.');
     }
 })();
