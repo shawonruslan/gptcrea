@@ -30,8 +30,6 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Bulk Wallpaper Generation Script
-        env:
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: node login.js
 
       - name: Upload Wallpapers Artifact
