@@ -1,12 +1,6 @@
 name: ChatGPT Login Flow Automation
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
   workflow_dispatch: # Allows manual triggering from the GitHub UI
 
 jobs:
