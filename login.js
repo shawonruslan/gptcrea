@@ -40,6 +40,13 @@ async function createNewSession() {
         console.log('Waiting for email address generation...');
         const emailInput = mailwavePage.locator('input#mainEmail');
         await emailInput.waitFor({ state: 'visible', timeout: 0 });
+
+        // Clean up the initial mailbox once to clear any previous cached session
+        console.log('Cleaning up initial session mailbox...');
+        const initialDeleteBtn = mailwavePage.locator('button#delete');
+        await initialDeleteBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+        await initialDeleteBtn.click({ force: true, timeout: 2000 }).catch(() => {});
+        await mailwavePage.waitForTimeout(3000);
         
         let attempts = 0;
         while (attempts < 15) {
@@ -102,9 +109,9 @@ async function createNewSession() {
         // Fallback: If still on same screen, click Continue button directly
         await page.waitForTimeout(2000);
         const continueBtn = page.locator('button[type="submit"]:has-text("Continue"), button:has-text("Continue")');
-        if (await continueBtn.count() > 0 && await continueBtn.isVisible()) {
+        if (await continueBtn.count() > 0 && await continueBtn.first().isVisible()) {
             console.log('Clicking the Continue button directly...');
-            await continueBtn.click();
+            await continueBtn.first().click().catch(() => {});
         }
 
         console.log('Waiting for verification page (waiting for code input)...');
@@ -116,35 +123,50 @@ async function createNewSession() {
         const mailboxItem = mailwavePage.locator('#mailbox .mailbox-item');
         
         let emailArrived = false;
+        let otp = '';
         for (let attempt = 1; attempt <= 30; attempt++) {
             if (await mailboxItem.count() > 0) {
-                const text = await mailboxItem.first().textContent();
-                if (text.includes('ChatGPT') || text.includes('verification code')) {
-                    emailArrived = true;
-                    break;
+                const item = mailboxItem.first();
+                const itemText = await item.textContent().catch(() => '');
+                if (itemText.includes('ChatGPT') || itemText.includes('verification code')) {
+                    console.log('Verification email found in list! Opening message...');
+                    await item.click({ force: true, timeout: 2000 }).catch(() => {});
+                    
+                    // Wait for the message body iframe to be attached
+                    const iframeLocator = mailwavePage.locator('iframe#myContent');
+                    await iframeLocator.waitFor({ state: 'attached', timeout: 5000 }).catch(() => {});
+                    await mailwavePage.waitForTimeout(2000);
+
+                    const iframe = mailwavePage.frameLocator('iframe#myContent');
+                    
+                    // Find elements containing only the 6-digit OTP code to avoid matching CSS hex colors inside the iframe body
+                    const otpElements = await iframe.locator('p, span, div').all();
+                    for (const el of otpElements) {
+                        const text = (await el.textContent() || '').trim();
+                        if (/^\d{6}$/.test(text)) {
+                            otp = text;
+                            break;
+                        }
+                    }
+
+                    if (otp) {
+                        emailArrived = true;
+                        break;
+                    } else {
+                        console.log('Could not find 6-digit OTP code in the email iframe content. Navigating back...');
+                        await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 0 });
+                        await mailwavePage.waitForTimeout(2000);
+                    }
                 }
             }
-            console.log(`Email not arrived yet (attempt ${attempt}/30). Refreshing inbox...`);
-            await mailwavePage.locator('#refresh').click({ force: true, timeout: 2000 }).catch(() => {});
+            console.log(`Email not arrived yet (attempt ${attempt}/30). Waiting...`);
             await mailwavePage.waitForTimeout(5000);
         }
 
-        if (!emailArrived) {
-            throw new Error('Verification email from ChatGPT did not arrive on mailwave.dev.');
+        if (!emailArrived || !otp) {
+            throw new Error('Verification email from ChatGPT did not arrive on mailwave.dev or was invalid.');
         }
 
-        console.log('Verification email arrived! Opening message...');
-        await mailboxItem.first().click();
-        await mailwavePage.waitForTimeout(3000);
-
-        console.log('Extracting OTP code...');
-        const bodyText = await mailwavePage.locator('body').textContent();
-        const otpMatch = bodyText.match(/\b\d{6}\b/);
-        if (!otpMatch) {
-            throw new Error('Could not find 6-digit OTP code on the email content.');
-        }
-        
-        const otp = otpMatch[0];
         console.log(`Successfully retrieved OTP: ${otp}`);
 
         // Close the mailwave browser as we are done with it
@@ -165,11 +187,11 @@ async function createNewSession() {
 
         // If nameInput is not visible yet, try to find and click the submit button
         const nameInput = page.locator('input[name="name"], input[placeholder="Full name"]');
-        if (await nameInput.count() === 0 || !(await nameInput.isVisible())) {
+        if (await nameInput.count() === 0 || !(await nameInput.first().isVisible())) {
             console.log('Form did not auto-submit. Locating and clicking submit/continue button...');
             const submitBtn = page.locator('button[type="submit"][value="validate"], button:has-text("Continue")');
-            if (await submitBtn.count() > 0 && await submitBtn.isVisible()) {
-                await submitBtn.click().catch(err => console.log('Submit button click ignored:', err.message));
+            if (await submitBtn.count() > 0 && await submitBtn.first().isVisible()) {
+                await submitBtn.first().click().catch(err => console.log('Submit button click ignored:', err.message));
             }
         }
 
@@ -296,9 +318,15 @@ async function createNewSession() {
             const promptArea = page.locator('#prompt-textarea');
             await promptArea.waitFor({ state: 'visible', timeout: 0 });
 
-            console.log('Focusing and typing the image prompt...');
+            // Format the prompt with the required 9:16 aspect ratio instruction prefix if not already present
+            let finalPrompt = prompt;
+            if (!finalPrompt.toLowerCase().includes('9:16') && !finalPrompt.toLowerCase().includes('ratio')) {
+                finalPrompt = `Create image a wallpaper 9:16 ratio of ${prompt}`;
+            }
+
+            console.log(`Focusing and typing final prompt: "${finalPrompt}"`);
             await promptArea.click();
-            await page.keyboard.type(prompt);
+            await page.keyboard.type(finalPrompt);
             await page.waitForTimeout(1000);
 
             console.log('Locating send button...');
