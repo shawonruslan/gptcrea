@@ -1,0 +1,47 @@
+name: ChatGPT Login Flow Automation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: # Allows manual triggering from the GitHub UI
+
+jobs:
+  run-playwright:
+    name: Run ChatGPT Login Script
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Create screenshots directory
+        run: mkdir -p screenshots
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install Playwright Browsers with dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Login Automation Script
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: node login.js
+
+      - name: Upload Screenshots Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chatgpt-login-screenshots
+          path: screenshots/
+          retention-days: 5
