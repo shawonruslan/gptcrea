@@ -1,7 +1,5 @@
 const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
-const { ImapFlow } = require('imapflow');
-const { simpleParser } = require('mailparser');
 const fs = require('fs');
 const path = require('path');
 
@@ -21,107 +19,6 @@ function generateRandomString(length) {
     return result;
 }
 
-// CONFIGURATION: Set your base Gmail registration email here (e.g. 'holaexplainer@gmail.com')
-const BASE_EMAIL = 'holaexplainer@gmail.com';
-
-function getParentEmail(email) {
-    const [localPart, domain] = email.split('@');
-    const [baseLocal] = localPart.split('+');
-    return `${baseLocal}@${domain}`;
-}
-
-async function getOTP(targetEmail) {
-    const parentEmail = getParentEmail(targetEmail);
-    const appPassword = process.env.GMAIL_APP_PASSWORD;
-
-    if (!appPassword) {
-        throw new Error('GMAIL_APP_PASSWORD environment variable is not set!');
-    }
-
-    // Try up to 30 attempts, checking every 5 seconds (2.5 minutes total)
-    for (let attempt = 1; attempt <= 30; attempt++) {
-        console.log(`Checking Gmail inbox for OTP (Attempt ${attempt}/30)...`);
-
-        const client = new ImapFlow({
-            host: 'imap.gmail.com',
-            port: 993,
-            secure: true,
-            auth: {
-                user: parentEmail,
-                pass: appPassword
-            },
-            logger: false
-        });
-
-        try {
-            await client.connect();
-            
-            // Lock mailbox to ensure state is synchronized and fresh
-            let lock = await client.getMailboxLock('INBOX');
-            try {
-                // Broad search by subject. Gmail returns UIDs in ascending order (oldest to newest)
-                let uids = await client.search({
-                    subject: 'ChatGPT'
-                });
-
-                console.log(`Found ${uids.length} email(s) with 'ChatGPT' in the subject.`);
-
-                if (uids && uids.length > 0) {
-                    const uid = uids[uids.length - 1];
-                    const msg = await client.fetchOne(uid, { source: true });
-                    
-                    // Parse raw email structure
-                    const parsed = await simpleParser(msg.source);
-                    const text = parsed.text || '';
-                    const html = parsed.html || '';
-                    
-                    // Extract recipient details
-                    const toText = (parsed.to && parsed.to.text) ? parsed.to.text.toLowerCase() : '';
-                    const parsedEmails = parsed.to && parsed.to.value 
-                        ? parsed.to.value.map(val => (val.address || '').toLowerCase()) 
-                        : [];
-
-                    console.log(`Checking newest UID: ${uid} | Recipient Header: "${toText}"`);
-
-                    // Verify if target email is the recipient
-                    const isMatch = toText.includes(targetEmail.toLowerCase()) || 
-                                    parsedEmails.includes(targetEmail.toLowerCase()) || 
-                                    text.includes(targetEmail) ||
-                                    html.includes(targetEmail);
-
-                    if (isMatch) {
-                        // Find 6-digit OTP code
-                        const otpRegex = /\b\d{6}\b/;
-                        let match = text.match(otpRegex);
-                        if (!match) {
-                            match = html.match(otpRegex);
-                        }
-
-                        if (match) {
-                            const otp = match[0];
-                            console.log(`Found OTP: ${otp} for ${targetEmail}`);
-                            return otp;
-                        } else {
-                            console.log(`Could not extract a 6-digit OTP code from message UID: ${uid}.`);
-                        }
-                    }
-                }
-            } finally {
-                // Release lock on INBOX
-                lock.release();
-            }
-        } catch (err) {
-            console.error(`IMAP connection/search error on attempt ${attempt}:`, err);
-        } finally {
-            await client.logout().catch(() => {});
-        }
-
-        // Wait 5 seconds before checking again
-        await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-    throw new Error(`OTP email not found for ${targetEmail} after 30 attempts.`);
-}
-
 async function createNewSession() {
     console.log('\n--- Creating New Browser Session and Registering New Account ---');
     const browser = await chromium.launch({ headless: true });
@@ -136,10 +33,38 @@ async function createNewSession() {
     });
 
     const page = await context.newPage();
+    const mailwavePage = await context.newPage(); // Open temp mail in a second tab
+    
     page.setDefaultTimeout(0);
     page.setDefaultNavigationTimeout(0);
+    mailwavePage.setDefaultTimeout(0);
+    mailwavePage.setDefaultNavigationTimeout(0);
 
     try {
+        // Step 1: Generate disposable email address
+        console.log('Navigating to mailwave.dev to generate temp email...');
+        await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 0 });
+        
+        console.log('Waiting for email address generation...');
+        const emailInput = mailwavePage.locator('input#mainEmail');
+        await emailInput.waitFor({ state: 'visible', timeout: 0 });
+        
+        let email = '';
+        for (let attempt = 1; attempt <= 30; attempt++) {
+            email = await emailInput.inputValue();
+            if (email && email !== 'landing' && email.includes('@')) {
+                break;
+            }
+            await mailwavePage.waitForTimeout(1000);
+        }
+        
+        if (!email || email === 'landing') {
+            throw new Error('Failed to generate email on mailwave.dev');
+        }
+        
+        console.log(`Successfully generated email: ${email}`);
+
+        // Step 2: Register on ChatGPT
         console.log('Navigating to ChatGPT...');
         await page.goto('https://chatgpt.com/', { waitUntil: 'load', timeout: 0 });
 
@@ -147,18 +72,14 @@ async function createNewSession() {
         await loginBtn.waitFor({ state: 'visible', timeout: 0 });
         await loginBtn.click();
 
-        const emailInput = page.locator('input#email');
-        await emailInput.waitFor({ state: 'visible', timeout: 0 });
+        const chatgptEmailInput = page.locator('input#email');
+        await chatgptEmailInput.waitFor({ state: 'visible', timeout: 0 });
 
-        const randomString = generateRandomString(6);
-        const [localPart, domain] = BASE_EMAIL.split('@');
-        const email = `${localPart}+${randomString}@${domain}`;
-        console.log(`Registering account with email: ${email}`);
+        console.log(`Entering registration email: ${email}`);
+        await chatgptEmailInput.fill(email);
+        await chatgptEmailInput.press('Enter');
 
-        await emailInput.fill(email);
-        await emailInput.press('Enter');
-
-        // Fallback: If still on the same page after 2 seconds, click the Continue button directly
+        // Fallback: If still on same screen, click Continue button directly
         await page.waitForTimeout(2000);
         const continueBtn = page.locator('button[type="submit"]:has-text("Continue"), button:has-text("Continue")');
         if (await continueBtn.count() > 0 && await continueBtn.isVisible()) {
@@ -170,13 +91,45 @@ async function createNewSession() {
         const codeInput = page.locator('input[name="code"], input[placeholder="Code"], input[id$="-code"]');
         await codeInput.waitFor({ state: 'visible', timeout: 0 });
 
-        // Get OTP from Gmail inbox
-        console.log(`Starting fetching OTP for ${email}...`);
-        const otp = await getOTP(email);
+        // Step 3: Fetch verification code from mailwavePage
+        console.log('Switching to mailwave.dev tab to wait for OTP...');
+        const mailboxItem = mailwavePage.locator('#mailbox .mailbox-item');
+        
+        let emailArrived = false;
+        for (let attempt = 1; attempt <= 30; attempt++) {
+            if (await mailboxItem.count() > 0) {
+                const text = await mailboxItem.first().textContent();
+                if (text.includes('ChatGPT') || text.includes('verification code')) {
+                    emailArrived = true;
+                    break;
+                }
+            }
+            console.log(`Email not arrived yet (attempt ${attempt}/30). Refreshing inbox...`);
+            await mailwavePage.locator('#refresh').click().catch(() => {});
+            await mailwavePage.waitForTimeout(5000);
+        }
+
+        if (!emailArrived) {
+            throw new Error('Verification email from ChatGPT did not arrive on mailwave.dev.');
+        }
+
+        console.log('Verification email arrived! Opening message...');
+        await mailboxItem.first().click();
+        await mailwavePage.waitForTimeout(3000);
+
+        // Step 4: Extract OTP from the page body
+        console.log('Extracting OTP code...');
+        const bodyText = await mailwavePage.locator('body').textContent();
+        const otpMatch = bodyText.match(/\b\d{6}\b/);
+        if (!otpMatch) {
+            throw new Error('Could not find 6-digit OTP code on the email content.');
+        }
+        
+        const otp = otpMatch[0];
         console.log(`Successfully retrieved OTP: ${otp}`);
 
-        // Enter OTP code
-        console.log('Typing OTP code...');
+        // Step 5: Fill in OTP and complete ChatGPT setup
+        console.log('Switching back to ChatGPT and typing OTP code...');
         await codeInput.fill(otp);
 
         const submitBtn = page.locator('button[type="submit"][value="validate"], button:has-text("Continue")');
@@ -201,16 +154,19 @@ async function createNewSession() {
         console.log('Waiting for redirect back to ChatGPT...');
         await page.waitForURL('**/chatgpt.com/**', { waitUntil: 'domcontentloaded', timeout: 0 });
 
-        // Wait a brief moment to let any welcome popup render
+        // Wait a brief moment to let welcome popups render
         await page.waitForTimeout(5000);
 
-        // Check if "You're all set" popup or dialog with 'Continue' button exists
+        // Check if "You're all set" popup or dialog exists
         const allSetBtn = page.locator('button.btn-primary:has-text("Continue"), button:has-text("Continue")');
         if (await allSetBtn.count() > 0) {
             console.log('"You\'re all set" button found. Clicking it...');
             await allSetBtn.first().click();
             await page.waitForTimeout(2000);
         }
+
+        // Close the temp mail tab as we are successfully signed up
+        await mailwavePage.close().catch(() => {});
 
         console.log('New account session successfully created and logged in.');
 
@@ -239,12 +195,6 @@ async function createNewSession() {
 }
 
 (async () => {
-    // Check credentials first
-    if (!process.env.GMAIL_APP_PASSWORD) {
-        console.error('ERROR: GMAIL_APP_PASSWORD environment variable is not defined.');
-        process.exit(1);
-    }
-
     // Read prompts from prompts.txt
     let prompts = [];
     const promptsPath = path.join(__dirname, 'prompts.txt');
@@ -270,14 +220,7 @@ async function createNewSession() {
     let accountIndex = 1;
 
     for (let i = 0; i < prompts.length; i++) {
-        let prompt = prompts[i];
-        
-        // Auto-prepend instruction if not already present in prompts.txt
-        const prefix = "Create image a wallpaper 9:16 ratio of ";
-        if (!prompt.toLowerCase().startsWith("create image")) {
-            prompt = prefix + prompt;
-        }
-
+        const prompt = prompts[i];
         console.log(`\n======================================================`);
         console.log(`Processing Prompt ${i + 1}/${prompts.length}`);
         console.log(`Prompt: "${prompt}"`);
