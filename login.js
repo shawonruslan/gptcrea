@@ -258,7 +258,14 @@ async function createNewSession() {
     let generationsOnCurrentAccount = 0;
 
     for (let i = 0; i < prompts.length; i++) {
-        const prompt = prompts[i];
+        let prompt = prompts[i];
+        
+        // Auto-prepend instruction if not already present in prompts.txt
+        const prefix = "Create image a wallpaper 9:16 ratio of ";
+        if (!prompt.toLowerCase().startsWith("create image")) {
+            prompt = prefix + prompt;
+        }
+
         console.log(`\n======================================================`);
         console.log(`Processing Prompt ${i + 1}/${prompts.length}`);
         console.log(`Prompt: "${prompt}"`);
