@@ -19,111 +19,79 @@ function generateRandomString(length) {
     return result;
 }
 
+function cleanHtml(html) {
+    if (!html) return '';
+    let clean = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ');
+    clean = clean.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ');
+    clean = clean.replace(/<!--[\s\S]*?-->/g, ' ');
+    clean = clean.replace(/<[^>]+>/g, ' ');
+    clean = clean.replace(/&nbsp;/gi, ' ')
+                 .replace(/&amp;/gi, '&')
+                 .replace(/&lt;/gi, '<')
+                 .replace(/&gt;/gi, '>');
+    return clean.replace(/\s+/g, ' ').trim();
+}
+
 async function createNewSession() {
     console.log('\n--- Creating New Browser Session and Registering New Account ---');
-    
-    // Launch a separate browser for mailwave to avoid session fingerprint association and background tab throttling
-    console.log('Launching separate browser process for mailwave.dev...');
-    const mailwaveBrowser = await chromium.launch({
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled'
-        ]
-    });
-    const mailwaveContext = await mailwaveBrowser.newContext({
-        viewport: { width: 1280, height: 800 }
-    });
-    
-
-    const mailwavePage = await mailwaveContext.newPage();
-    mailwavePage.setDefaultTimeout(30000);
-    mailwavePage.setDefaultNavigationTimeout(30000);
 
     let email = '';
+    let uuid = '';
     try {
-        console.log('Navigating to mailwave.dev to generate temp email...');
-        await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 30000 });
-        
-        console.log('Waiting for email address generation...');
-        const emailInput = mailwavePage.locator('input#mainEmail');
-        await emailInput.waitFor({ state: 'visible', timeout: 15000 });
+        console.log('Fetching active EduMails domains...');
+        const domainsRes = await fetch('https://api.edu-mails.com/api/domains');
+        const domainsJson = await domainsRes.json();
+        if (domainsJson.status !== 'success' || !domainsJson.data || !domainsJson.data.domains || domainsJson.data.domains.length === 0) {
+            throw new Error('Failed to fetch domains from EduMails API: ' + JSON.stringify(domainsJson));
+        }
 
-        // Clean up the initial mailbox once to clear any previous cached session
-        console.log('Cleaning up initial session mailbox...');
-        const initialDeleteBtn = mailwavePage.locator('button#delete');
-        await initialDeleteBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-        await initialDeleteBtn.click({ force: true, timeout: 2000 }).catch(() => {});
-        await mailwavePage.waitForTimeout(3000);
-        
-        let attempts = 0;
-        while (attempts < 15) {
-            email = await emailInput.inputValue();
-            if (email && email !== 'landing' && email.includes('@')) {
-                if (email.toLowerCase().includes('.edu')) {
-                    break;
-                }
-                console.log(`Generated email "${email}" is not an .edu domain (OpenAI blocks standard disposable domains). Requesting a new address...`);
-                const deleteBtn = mailwavePage.locator('button#delete');
-                await deleteBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-                await deleteBtn.click({ force: true, timeout: 2000 }).catch(() => {});
-                await mailwavePage.waitForTimeout(3000);
-            } else {
-                await mailwavePage.waitForTimeout(1000);
-            }
-            attempts++;
+        const domains = domainsJson.data.domains;
+        const selectedDomain = domains[Math.floor(Math.random() * domains.length)];
+        const alias = generateRandomString(10).toLowerCase();
+
+        console.log(`Generating EduMails temp email for custom alias: ${alias} on domain: ${selectedDomain.name} (id: ${selectedDomain.id})...`);
+        const genRes = await fetch('https://api.edu-mails.com/api/emails/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'custom',
+                alias: alias,
+                domain_id: selectedDomain.id
+            })
+        });
+        const genJson = await genRes.json();
+        if (genJson.status !== 'success' || !genJson.data || !genJson.data.email) {
+            throw new Error('Failed to generate email via EduMails: ' + JSON.stringify(genJson));
         }
-        
-        if (!email || email === 'landing' || !email.toLowerCase().includes('.edu')) {
-            throw new Error('Failed to generate a valid .edu email address on mailwave.dev');
-        }
-        console.log(`Successfully generated .edu email: ${email}`);
+        email = genJson.data.email.address;
+        uuid = genJson.data.email.uuid;
+        console.log(`Successfully generated email: ${email} (uuid: ${uuid})`);
     } catch (err) {
-        await mailwaveBrowser.close().catch(() => {});
         throw err;
     }
 
     // Now launch the main ChatGPT browser
     console.log('Launching main browser process for ChatGPT...');
-    const browser = await chromium.launch({
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled'
-        ]
-    });
+    const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        recordVideo: {
-            dir: 'wallpapers/',
-            size: { width: 1280, height: 800 }
-        }
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     });
 
-
     const page = await context.newPage();
-    page.setDefaultTimeout(30000);
-    page.setDefaultNavigationTimeout(30000);
+    page.setDefaultTimeout(60000);
+    page.setDefaultNavigationTimeout(60000);
 
     try {
         console.log('Navigating to ChatGPT...');
-        await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.goto('https://chatgpt.com/', { waitUntil: 'load' });
 
         const loginBtn = page.locator('[data-testid="login-button"]');
-        await loginBtn.waitFor({ state: 'visible', timeout: 30000 });
+        await loginBtn.waitFor({ state: 'visible' });
         await loginBtn.click();
 
-        console.log('Waiting for login form/email input...');
         const chatgptEmailInput = page.locator('input#email');
-        try {
-            await chatgptEmailInput.waitFor({ state: 'visible', timeout: 45000 });
-        } catch (err) {
-            console.log(`Current page URL when email input failed to appear: ${page.url()}`);
-            throw err;
-        }
+        await chatgptEmailInput.waitFor({ state: 'visible' });
 
         console.log(`Entering registration email: ${email}`);
         await chatgptEmailInput.fill(email);
@@ -132,68 +100,51 @@ async function createNewSession() {
         // Fallback: If still on same screen, click Continue button directly
         await page.waitForTimeout(2000);
         const continueBtn = page.locator('button[type="submit"]:has-text("Continue"), button:has-text("Continue")');
-        if (await continueBtn.count() > 0 && await continueBtn.first().isVisible()) {
+        if (await continueBtn.count() > 0 && await continueBtn.isVisible()) {
             console.log('Clicking the Continue button directly...');
-            await continueBtn.first().click().catch(() => {});
+            await continueBtn.click();
         }
 
         console.log('Waiting for verification page (waiting for code input)...');
         const codeInput = page.locator('input[name="code"], input[placeholder="Code"], input[id$="-code"]');
-        await codeInput.waitFor({ state: 'visible', timeout: 30000 });
+        await codeInput.waitFor({ state: 'visible' });
 
-        // Retrieve OTP using the mailwave browser
-        console.log('Checking mailwave.dev for OTP...');
-        const mailboxItem = mailwavePage.locator('#mailbox .mailbox-item');
-        
-        let emailArrived = false;
-        let otp = '';
+        // Retrieve OTP using EduMails API
+        console.log('Checking EduMails inbox for ChatGPT verification email...');
+        let otp = null;
         for (let attempt = 1; attempt <= 30; attempt++) {
-            if (await mailboxItem.count() > 0) {
-                const item = mailboxItem.first();
-                const itemText = await item.textContent().catch(() => '');
-                if (itemText.includes('ChatGPT') || itemText.includes('verification code')) {
-                    console.log('Verification email found in list! Opening message...');
-                    await item.click({ force: true, timeout: 2000 }).catch(() => {});
+            try {
+                const mailRes = await fetch(`https://api.edu-mails.com/api/emails/${uuid}`);
+                const mailJson = await mailRes.json();
+                if (mailJson.status === 'success' && mailJson.data && mailJson.data.messages) {
+                    const messages = mailJson.data.messages;
+                    const relevantMessage = messages.find(msg => 
+                        (msg.from && (msg.from.includes('ChatGPT') || msg.from.includes('OpenAI') || msg.from.includes('openai.com'))) ||
+                        (msg.subject && (msg.subject.includes('ChatGPT') || msg.subject.includes('verification'))) ||
+                        (msg.body && (msg.body.includes('ChatGPT') || msg.body.includes('verification')))
+                    );
                     
-                    // Wait for the message body iframe to be attached
-                    const iframeLocator = mailwavePage.locator('iframe#myContent');
-                    await iframeLocator.waitFor({ state: 'attached', timeout: 5000 }).catch(() => {});
-                    await mailwavePage.waitForTimeout(2000);
-
-                    const iframe = mailwavePage.frameLocator('iframe#myContent');
-                    
-                    // Find elements containing only the 6-digit OTP code to avoid matching CSS hex colors inside the iframe body
-                    const otpElements = await iframe.locator('p, span, div').all();
-                    for (const el of otpElements) {
-                        const text = (await el.textContent() || '').trim();
-                        if (/^\d{6}$/.test(text)) {
-                            otp = text;
+                    if (relevantMessage) {
+                        const cleanedBody = cleanHtml(relevantMessage.body);
+                        const contentToSearch = `${relevantMessage.subject || ''} ${cleanedBody}`;
+                        const otpMatch = contentToSearch.match(/\b\d{6}\b/);
+                        if (otpMatch) {
+                            otp = otpMatch[0];
                             break;
                         }
                     }
-
-                    if (otp) {
-                        emailArrived = true;
-                        break;
-                    } else {
-                        console.log('Could not find 6-digit OTP code in the email iframe content. Navigating back...');
-                        await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 30000 });
-                        await mailwavePage.waitForTimeout(2000);
-                    }
                 }
+            } catch (err) {
+                console.error(`Error checking inbox (attempt ${attempt}/30):`, err.message);
             }
-            console.log(`Email not arrived yet (attempt ${attempt}/30). Waiting...`);
-            await mailwavePage.waitForTimeout(5000);
+            console.log(`Email not arrived yet or OTP not found (attempt ${attempt}/30). Waiting 5 seconds...`);
+            await page.waitForTimeout(5000);
         }
 
-        if (!emailArrived || !otp) {
-            throw new Error('Verification email from ChatGPT did not arrive on mailwave.dev or was invalid.');
+        if (!otp) {
+            throw new Error('Verification email from ChatGPT did not arrive or OTP could not be extracted.');
         }
-
         console.log(`Successfully retrieved OTP: ${otp}`);
-
-        // Close the mailwave browser as we are done with it
-        await mailwaveBrowser.close().catch(() => {});
 
         // Bring the ChatGPT page to the front to ensure it is focused and not throttled
         console.log('Bringing ChatGPT tab to front...');
@@ -210,23 +161,23 @@ async function createNewSession() {
 
         // If nameInput is not visible yet, try to find and click the submit button
         const nameInput = page.locator('input[name="name"], input[placeholder="Full name"]');
-        if (await nameInput.count() === 0 || !(await nameInput.first().isVisible())) {
+        if (await nameInput.count() === 0 || !(await nameInput.isVisible())) {
             console.log('Form did not auto-submit. Locating and clicking submit/continue button...');
             const submitBtn = page.locator('button[type="submit"][value="validate"], button:has-text("Continue")');
-            if (await submitBtn.count() > 0 && await submitBtn.first().isVisible()) {
-                await submitBtn.first().click().catch(err => console.log('Submit button click ignored:', err.message));
+            if (await submitBtn.count() > 0 && await submitBtn.isVisible()) {
+                await submitBtn.click().catch(err => console.log('Submit button click ignored:', err.message));
             }
         }
 
         // Wait for profile setup form (About You) page
         console.log('Waiting for Profile Setup (About You) page to load...');
-        await nameInput.waitFor({ state: 'visible', timeout: 30000 });
+        await nameInput.waitFor({ state: 'visible' });
 
         console.log('Filling Profile Info (Name & Age)...');
         await nameInput.fill('jahid hasan');
 
         const ageInput = page.locator('input[name="age"], input[placeholder="Age"]');
-        await ageInput.waitFor({ state: 'visible', timeout: 15000 });
+        await ageInput.waitFor({ state: 'visible' });
         await ageInput.fill('30');
 
         console.log('Submitting Profile Info...');
@@ -234,7 +185,7 @@ async function createNewSession() {
         await finishBtn.click();
 
         console.log('Waiting for redirect back to ChatGPT...');
-        await page.waitForURL('**/chatgpt.com/**', { waitUntil: 'domcontentloaded', timeout: 0 });
+        await page.waitForURL('**/chatgpt.com/**', { waitUntil: 'domcontentloaded' });
 
         await page.waitForTimeout(5000);
 
@@ -256,17 +207,7 @@ async function createNewSession() {
     } catch (error) {
         console.error('An error occurred during account creation:', error);
         await page.screenshot({ path: 'wallpapers/error_signup.png', fullPage: true });
-        const video = page.video();
-        await browser.close().catch(() => {});
-        await mailwaveBrowser.close().catch(() => {});
-        if (video) {
-            const videoPath = await video.path().catch(() => null);
-            if (videoPath && fs.existsSync(videoPath)) {
-                const newVideoPath = path.join('wallpapers', 'error_signup_record.webm');
-                fs.renameSync(videoPath, newVideoPath);
-                console.log(`Saved error signup video record to: ${newVideoPath}`);
-            }
-        }
+        await browser.close().catch(() => { });
         throw error;
     }
 }
@@ -307,17 +248,7 @@ async function createNewSession() {
         if (!currentSession || generationsOnCurrentAccount >= 5) {
             if (currentSession) {
                 console.log('Reached 5 generations limit on this account. Closing browser and rotating account...');
-                const page = currentSession.page;
-                const video = page.video();
-                await currentSession.browser.close().catch(() => {});
-                if (video) {
-                    const videoPath = await video.path().catch(() => null);
-                    if (videoPath && fs.existsSync(videoPath)) {
-                        const newVideoPath = path.join('wallpapers', `account_${accountIndex}_record.webm`);
-                        fs.renameSync(videoPath, newVideoPath);
-                        console.log(`Saved account video record to: ${newVideoPath}`);
-                    }
-                }
+                await currentSession.browser.close().catch(() => { });
                 accountIndex++;
             }
             try {
@@ -335,44 +266,43 @@ async function createNewSession() {
 
         try {
             console.log('Resetting interface to start a fresh chat session...');
-            await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded' });
 
             console.log('Locating prompt input text area (#prompt-textarea)...');
             const promptArea = page.locator('#prompt-textarea');
-            await promptArea.waitFor({ state: 'visible', timeout: 30000 });
+            await promptArea.waitFor({ state: 'visible' });
 
-            // Format the prompt with the required 9:16 aspect ratio instruction prefix if not already present
-            let finalPrompt = prompt;
-            if (!finalPrompt.toLowerCase().includes('9:16') && !finalPrompt.toLowerCase().includes('ratio')) {
-                finalPrompt = `Create image a wallpaper 9:16 ratio of ${prompt}`;
-            }
-
-            console.log(`Focusing and typing final prompt: "${finalPrompt}"`);
+            console.log('Focusing and typing the image prompt...');
             await promptArea.click();
+            let finalPrompt = prompt;
+            if (!prompt.includes('9:16') && !prompt.toLowerCase().includes('aspect ratio')) {
+                finalPrompt = `Create a vertical 9:16 aspect ratio wallpaper of: ${prompt}`;
+            }
+            console.log(`Typing formatted prompt: "${finalPrompt}"`);
             await page.keyboard.type(finalPrompt);
             await page.waitForTimeout(1000);
 
             console.log('Locating send button...');
             const sendBtn = page.locator('[data-testid="send-button"], #composer-submit-button');
-            await sendBtn.waitFor({ state: 'visible', timeout: 0 });
+            await sendBtn.waitFor({ state: 'visible' });
 
             console.log('Clicking the send button...');
             await sendBtn.click();
 
             console.log('Waiting for image generation to complete (waiting for Share button)...');
             const shareBtn = page.locator('button[aria-label="Share this image"]').first();
-            await shareBtn.waitFor({ state: 'visible', timeout: 120000 });
+            await shareBtn.waitFor({ state: 'visible' });
 
             console.log('Image generated successfully. Hovering and clicking Share...');
             const imageContainer = page.locator('.group\\/imagegen-image').first();
             if (await imageContainer.count() > 0) {
-                await imageContainer.hover().catch(() => {});
+                await imageContainer.hover().catch(() => { });
             }
             await shareBtn.click();
 
             console.log('Waiting for share modal to load...');
             const downloadBtn = page.locator('button:has-text("Download")').first();
-            await downloadBtn.waitFor({ state: 'visible', timeout: 30000 });
+            await downloadBtn.waitFor({ state: 'visible' });
 
             console.log('Interceptors ready. Clicking the download button inside the share modal...');
             const downloadPromise = page.waitForEvent('download');
@@ -388,7 +318,7 @@ async function createNewSession() {
             // Close the share modal
             const closeBtn = page.locator('button[data-testid="close-button"]').first();
             if (await closeBtn.count() > 0) {
-                await closeBtn.click().catch(() => {});
+                await closeBtn.click().catch(() => { });
             }
 
             generationsOnCurrentAccount++;
@@ -399,19 +329,8 @@ async function createNewSession() {
             await page.screenshot({ path: `wallpapers/error_prompt_${i + 1}.png`, fullPage: true });
         }
     }
-
     if (currentSession) {
-        const page = currentSession.page;
-        const video = page.video();
-        await currentSession.browser.close().catch(() => {});
-        if (video) {
-            const videoPath = await video.path().catch(() => null);
-            if (videoPath && fs.existsSync(videoPath)) {
-                const newVideoPath = path.join('wallpapers', `account_${accountIndex}_record.webm`);
-                fs.renameSync(videoPath, newVideoPath);
-                console.log(`Saved account video record to: ${newVideoPath}`);
-            }
-        }
+        await currentSession.browser.close().catch(() => { });
         console.log('\nAll prompts processed. Browser closed.');
     }
 })();
