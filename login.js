@@ -21,12 +21,8 @@ function generateRandomString(length) {
     return result;
 }
 
-// CONFIGURATION:
-// 1. Set your base Outlook registration email here (e.g. 'ruslanbaba1@outlook.com')
-const BASE_EMAIL = 'ruslanbaba1@outlook.com';
-
-// 2. Set the Gmail address where Outlook forwards all verification emails
-const GMAIL_FORWARD_INBOX = 'holaexplainer@gmail.com';
+// CONFIGURATION: Set your base Gmail registration email here (e.g. 'holaexplainer@gmail.com')
+const BASE_EMAIL = 'holaexplainer@gmail.com';
 
 function getParentEmail(email) {
     const [localPart, domain] = email.split('@');
@@ -35,6 +31,7 @@ function getParentEmail(email) {
 }
 
 async function getOTP(targetEmail) {
+    const parentEmail = getParentEmail(targetEmail);
     const appPassword = process.env.GMAIL_APP_PASSWORD;
 
     if (!appPassword) {
@@ -43,14 +40,14 @@ async function getOTP(targetEmail) {
 
     // Try up to 30 attempts, checking every 5 seconds (2.5 minutes total)
     for (let attempt = 1; attempt <= 30; attempt++) {
-        console.log(`Checking Gmail inbox for forwarded Outlook OTP (Attempt ${attempt}/30)...`);
+        console.log(`Checking Gmail inbox for OTP (Attempt ${attempt}/30)...`);
 
         const client = new ImapFlow({
             host: 'imap.gmail.com',
             port: 993,
             secure: true,
             auth: {
-                user: GMAIL_FORWARD_INBOX,
+                user: parentEmail,
                 pass: appPassword
             },
             logger: false
