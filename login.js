@@ -24,24 +24,31 @@ async function createNewSession() {
     
     // Launch a separate browser for mailwave to avoid session fingerprint association and background tab throttling
     console.log('Launching separate browser process for mailwave.dev...');
-    const mailwaveBrowser = await chromium.launch({ headless: true });
+    const mailwaveBrowser = await chromium.launch({
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled'
+        ]
+    });
     const mailwaveContext = await mailwaveBrowser.newContext({
         viewport: { width: 1280, height: 800 }
     });
     
 
     const mailwavePage = await mailwaveContext.newPage();
-    mailwavePage.setDefaultTimeout(0);
-    mailwavePage.setDefaultNavigationTimeout(0);
+    mailwavePage.setDefaultTimeout(30000);
+    mailwavePage.setDefaultNavigationTimeout(30000);
 
     let email = '';
     try {
         console.log('Navigating to mailwave.dev to generate temp email...');
-        await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 0 });
+        await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 30000 });
         
         console.log('Waiting for email address generation...');
         const emailInput = mailwavePage.locator('input#mainEmail');
-        await emailInput.waitFor({ state: 'visible', timeout: 0 });
+        await emailInput.waitFor({ state: 'visible', timeout: 15000 });
 
         // Clean up the initial mailbox once to clear any previous cached session
         console.log('Cleaning up initial session mailbox...');
@@ -79,7 +86,14 @@ async function createNewSession() {
 
     // Now launch the main ChatGPT browser
     console.log('Launching main browser process for ChatGPT...');
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled'
+        ]
+    });
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -91,19 +105,19 @@ async function createNewSession() {
 
 
     const page = await context.newPage();
-    page.setDefaultTimeout(0);
-    page.setDefaultNavigationTimeout(0);
+    page.setDefaultTimeout(30000);
+    page.setDefaultNavigationTimeout(30000);
 
     try {
         console.log('Navigating to ChatGPT...');
-        await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 0 });
+        await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
         const loginBtn = page.locator('[data-testid="login-button"]');
-        await loginBtn.waitFor({ state: 'visible', timeout: 0 });
+        await loginBtn.waitFor({ state: 'visible', timeout: 15000 });
         await loginBtn.click();
 
         const chatgptEmailInput = page.locator('input#email');
-        await chatgptEmailInput.waitFor({ state: 'visible', timeout: 0 });
+        await chatgptEmailInput.waitFor({ state: 'visible', timeout: 15000 });
 
         console.log(`Entering registration email: ${email}`);
         await chatgptEmailInput.fill(email);
@@ -119,7 +133,7 @@ async function createNewSession() {
 
         console.log('Waiting for verification page (waiting for code input)...');
         const codeInput = page.locator('input[name="code"], input[placeholder="Code"], input[id$="-code"]');
-        await codeInput.waitFor({ state: 'visible', timeout: 0 });
+        await codeInput.waitFor({ state: 'visible', timeout: 30000 });
 
         // Retrieve OTP using the mailwave browser
         console.log('Checking mailwave.dev for OTP...');
@@ -157,7 +171,7 @@ async function createNewSession() {
                         break;
                     } else {
                         console.log('Could not find 6-digit OTP code in the email iframe content. Navigating back...');
-                        await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 0 });
+                        await mailwavePage.goto('https://mailwave.dev/', { waitUntil: 'load', timeout: 30000 });
                         await mailwavePage.waitForTimeout(2000);
                     }
                 }
@@ -200,13 +214,13 @@ async function createNewSession() {
 
         // Wait for profile setup form (About You) page
         console.log('Waiting for Profile Setup (About You) page to load...');
-        await nameInput.waitFor({ state: 'visible', timeout: 0 });
+        await nameInput.waitFor({ state: 'visible', timeout: 30000 });
 
         console.log('Filling Profile Info (Name & Age)...');
         await nameInput.fill('jahid hasan');
 
         const ageInput = page.locator('input[name="age"], input[placeholder="Age"]');
-        await ageInput.waitFor({ state: 'visible', timeout: 0 });
+        await ageInput.waitFor({ state: 'visible', timeout: 15000 });
         await ageInput.fill('30');
 
         console.log('Submitting Profile Info...');
@@ -315,11 +329,11 @@ async function createNewSession() {
 
         try {
             console.log('Resetting interface to start a fresh chat session...');
-            await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 0 });
+            await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
             console.log('Locating prompt input text area (#prompt-textarea)...');
             const promptArea = page.locator('#prompt-textarea');
-            await promptArea.waitFor({ state: 'visible', timeout: 0 });
+            await promptArea.waitFor({ state: 'visible', timeout: 30000 });
 
             // Format the prompt with the required 9:16 aspect ratio instruction prefix if not already present
             let finalPrompt = prompt;
@@ -341,7 +355,7 @@ async function createNewSession() {
 
             console.log('Waiting for image generation to complete (waiting for Share button)...');
             const shareBtn = page.locator('button[aria-label="Share this image"]').first();
-            await shareBtn.waitFor({ state: 'visible', timeout: 0 });
+            await shareBtn.waitFor({ state: 'visible', timeout: 120000 });
 
             console.log('Image generated successfully. Hovering and clicking Share...');
             const imageContainer = page.locator('.group\\/imagegen-image').first();
@@ -352,7 +366,7 @@ async function createNewSession() {
 
             console.log('Waiting for share modal to load...');
             const downloadBtn = page.locator('button:has-text("Download")').first();
-            await downloadBtn.waitFor({ state: 'visible', timeout: 0 });
+            await downloadBtn.waitFor({ state: 'visible', timeout: 30000 });
 
             console.log('Interceptors ready. Clicking the download button inside the share modal...');
             const downloadPromise = page.waitForEvent('download');
