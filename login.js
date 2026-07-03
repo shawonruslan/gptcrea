@@ -113,11 +113,17 @@ async function createNewSession() {
         await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
         const loginBtn = page.locator('[data-testid="login-button"]');
-        await loginBtn.waitFor({ state: 'visible', timeout: 15000 });
+        await loginBtn.waitFor({ state: 'visible', timeout: 30000 });
         await loginBtn.click();
 
+        console.log('Waiting for login form/email input...');
         const chatgptEmailInput = page.locator('input#email');
-        await chatgptEmailInput.waitFor({ state: 'visible', timeout: 15000 });
+        try {
+            await chatgptEmailInput.waitFor({ state: 'visible', timeout: 45000 });
+        } catch (err) {
+            console.log(`Current page URL when email input failed to appear: ${page.url()}`);
+            throw err;
+        }
 
         console.log(`Entering registration email: ${email}`);
         await chatgptEmailInput.fill(email);
