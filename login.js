@@ -34,47 +34,43 @@ function cleanHtml(html) {
 
 async function dismissOnboarding(page) {
     console.log('Checking for onboarding screens or modals to dismiss...');
-    // We try dismissing up to 5 consecutive onboarding prompts/modals
-    for (let i = 0; i < 5; i++) {
-        // Wait a brief moment for the DOM to settle
-        await page.waitForTimeout(1000);
+    // We will attempt to dismiss up to 5 consecutive onboarding screens/steps
+    for (let step = 0; step < 5; step++) {
+        let foundElement = null;
+        let actionName = '';
+        
+        const locators = [
+            { name: 'Skip', locator: page.locator('button:has-text("Skip"), [role="button"]:has-text("Skip"), a:has-text("Skip"), span:has-text("Skip")') },
+            { name: 'Continue/Done/Got it', locator: page.locator('button:has-text("Continue"), [role="button"]:has-text("Continue"), button:has-text("Done"), button:has-text("Got it")') },
+            { name: 'Let\'s go', locator: page.locator('button:has-text("Okay, let\'s go"), button:has-text("Let\'s go")') },
+            { name: 'Close button', locator: page.locator('button[data-testid="close-button"], [aria-label="Close"]') }
+        ];
 
-        // 1. Look for "Skip" button/link (highest priority to bypass survey pages)
-        const skipBtn = page.locator('button:has-text("Skip"), [role="button"]:has-text("Skip"), a:has-text("Skip"), span:has-text("Skip")').first();
-        if (await skipBtn.count() > 0 && await skipBtn.isVisible()) {
-            console.log('Found "Skip" onboarding button. Clicking it...');
-            await skipBtn.click();
-            continue; // Check if next screen/dialog appears
+        // Poll for visibility of any of these elements
+        for (let attempt = 0; attempt < 8; attempt++) { // 8 * 500ms = 4 seconds max wait per step
+            for (const item of locators) {
+                if (await item.locator.count() > 0 && await item.locator.first().isVisible()) {
+                    foundElement = item.locator.first();
+                    actionName = item.name;
+                    break;
+                }
+            }
+            if (foundElement) break;
+            await page.waitForTimeout(500);
         }
 
-        // 2. Look for "You're all set" / "Continue" or general "Continue" buttons
-        const continueBtn = page.locator('button:has-text("Continue"), [role="button"]:has-text("Continue"), button:has-text("Done"), button:has-text("Got it")').first();
-        if (await continueBtn.count() > 0 && await continueBtn.isVisible()) {
-            console.log('Found "Continue/Done/Got it" onboarding button. Clicking it...');
-            await continueBtn.click();
-            continue;
+        if (foundElement) {
+            console.log(`Found "${actionName}" onboarding button. Clicking it...`);
+            await foundElement.click();
+            // Wait 1.5 seconds for the transition after clicking
+            await page.waitForTimeout(1500);
+        } else {
+            console.log('No onboarding screens or modals visible.');
+            break;
         }
-
-        // 3. Look for "Okay, let's go" or similar onboarding start buttons
-        const letsGoBtn = page.locator('button:has-text("Okay, let\'s go"), button:has-text("Let\'s go")').first();
-        if (await letsGoBtn.count() > 0 && await letsGoBtn.isVisible()) {
-            console.log('Found "Let\'s go" button. Clicking it...');
-            await letsGoBtn.click();
-            continue;
-        }
-
-        // 4. Look for modal close buttons
-        const closeBtn = page.locator('button[data-testid="close-button"], [aria-label="Close"]').first();
-        if (await closeBtn.count() > 0 && await closeBtn.isVisible()) {
-            console.log('Found close button. Clicking it...');
-            await closeBtn.click();
-            continue;
-        }
-
-        // Break if no dismissible onboarding elements found
-        break;
     }
 }
+
 
 async function createNewSession() {
     console.log('\n--- Creating New Browser Session and Registering New Account ---');
