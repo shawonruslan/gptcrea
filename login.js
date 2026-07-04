@@ -133,7 +133,7 @@ async function createNewSession() {
         console.log('Navigating to ChatGPT...');
         await page.goto('https://chatgpt.com/', { waitUntil: 'load' });
 
-        const loginBtn = page.locator('[data-testid="login-button"]');
+        const loginBtn = page.locator('[data-testid="login-button"], button:has-text("Log in"), a:has-text("Log in"), [role="button"]:has-text("Log in")').first();
         await loginBtn.waitFor({ state: 'visible' });
         await loginBtn.click();
 
