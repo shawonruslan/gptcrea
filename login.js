@@ -133,7 +133,7 @@ async function createNewSession() {
         console.log('Navigating to ChatGPT...');
         await page.goto('https://chatgpt.com/', { waitUntil: 'load' });
 
-        const loginBtn = page.locator('[data-testid="login-button"], button:has-text("Log in"), a:has-text("Log in"), [role="button"]:has-text("Log in")').first();
+        const loginBtn = page.locator('[data-testid="login-button"]');
         await loginBtn.waitFor({ state: 'visible' });
         await loginBtn.click();
 
@@ -340,9 +340,8 @@ async function createNewSession() {
             await sendBtn.click();
 
             console.log('Waiting for image generation to complete (waiting for Share button)...');
-            // Image generation can take a long time — use 3 minute timeout
-            const shareBtn = page.locator('button[aria-label="Share this image"], button[aria-label="Share"]').first();
-            await shareBtn.waitFor({ state: 'visible', timeout: 180000 });
+            const shareBtn = page.locator('button[aria-label="Share this image"]').first();
+            await shareBtn.waitFor({ state: 'visible' });
 
             console.log('Image generated successfully. Hovering and clicking Share...');
             const imageContainer = page.locator('.group\\/imagegen-image').first();
@@ -377,11 +376,7 @@ async function createNewSession() {
 
         } catch (error) {
             console.error(`Error processing prompt ${i + 1}:`, error);
-            try {
-                await page.screenshot({ path: `wallpapers/error_prompt_${i + 1}.png`, fullPage: true });
-            } catch (screenshotErr) {
-                console.error('Could not capture error screenshot:', screenshotErr.message);
-            }
+            await page.screenshot({ path: `wallpapers/error_prompt_${i + 1}.png`, fullPage: true });
         }
     }
     if (currentSession) {
