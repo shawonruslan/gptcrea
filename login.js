@@ -32,6 +32,50 @@ function cleanHtml(html) {
     return clean.replace(/\s+/g, ' ').trim();
 }
 
+async function dismissOnboarding(page) {
+    console.log('Checking for onboarding screens or modals to dismiss...');
+    // We try dismissing up to 5 consecutive onboarding prompts/modals
+    for (let i = 0; i < 5; i++) {
+        // Wait a brief moment for the DOM to settle
+        await page.waitForTimeout(1000);
+
+        // 1. Look for "Skip" button/link (highest priority to bypass survey pages)
+        const skipBtn = page.locator('button:has-text("Skip"), [role="button"]:has-text("Skip"), a:has-text("Skip"), span:has-text("Skip")').first();
+        if (await skipBtn.count() > 0 && await skipBtn.isVisible()) {
+            console.log('Found "Skip" onboarding button. Clicking it...');
+            await skipBtn.click();
+            continue; // Check if next screen/dialog appears
+        }
+
+        // 2. Look for "You're all set" / "Continue" or general "Continue" buttons
+        const continueBtn = page.locator('button:has-text("Continue"), [role="button"]:has-text("Continue"), button:has-text("Done"), button:has-text("Got it")').first();
+        if (await continueBtn.count() > 0 && await continueBtn.isVisible()) {
+            console.log('Found "Continue/Done/Got it" onboarding button. Clicking it...');
+            await continueBtn.click();
+            continue;
+        }
+
+        // 3. Look for "Okay, let's go" or similar onboarding start buttons
+        const letsGoBtn = page.locator('button:has-text("Okay, let\'s go"), button:has-text("Let\'s go")').first();
+        if (await letsGoBtn.count() > 0 && await letsGoBtn.isVisible()) {
+            console.log('Found "Let\'s go" button. Clicking it...');
+            await letsGoBtn.click();
+            continue;
+        }
+
+        // 4. Look for modal close buttons
+        const closeBtn = page.locator('button[data-testid="close-button"], [aria-label="Close"]').first();
+        if (await closeBtn.count() > 0 && await closeBtn.isVisible()) {
+            console.log('Found close button. Clicking it...');
+            await closeBtn.click();
+            continue;
+        }
+
+        // Break if no dismissible onboarding elements found
+        break;
+    }
+}
+
 async function createNewSession() {
     console.log('\n--- Creating New Browser Session and Registering New Account ---');
 
@@ -187,14 +231,7 @@ async function createNewSession() {
         console.log('Waiting for redirect back to ChatGPT...');
         await page.waitForURL('**/chatgpt.com/**', { waitUntil: 'domcontentloaded' });
 
-        await page.waitForTimeout(5000);
-
-        const allSetBtn = page.locator('button.btn-primary:has-text("Continue"), button:has-text("Continue")');
-        if (await allSetBtn.count() > 0) {
-            console.log('"You\'re all set" button found. Clicking it...');
-            await allSetBtn.first().click();
-            await page.waitForTimeout(2000);
-        }
+        await dismissOnboarding(page);
 
         console.log('New account session successfully created and logged in.');
 
@@ -267,6 +304,8 @@ async function createNewSession() {
         try {
             console.log('Resetting interface to start a fresh chat session...');
             await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded' });
+
+            await dismissOnboarding(page);
 
             console.log('Locating prompt input text area (#prompt-textarea)...');
             const promptArea = page.locator('#prompt-textarea');
