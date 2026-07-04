@@ -40,7 +40,7 @@ async function dismissOnboarding(page) {
         let actionName = '';
         
         const locators = [
-            { name: 'Skip', locator: page.locator('button:has-text("Skip"), [role="button"]:has-text("Skip"), a:has-text("Skip"), span:has-text("Skip")') },
+            { name: 'Skip', locator: page.locator('button, [role="button"], a, span').getByText('Skip', { exact: true }) },
             { name: 'Continue/Done/Got it', locator: page.locator('button:has-text("Continue"), [role="button"]:has-text("Continue"), button:has-text("Done"), button:has-text("Got it")') },
             { name: 'Let\'s go', locator: page.locator('button:has-text("Okay, let\'s go"), button:has-text("Let\'s go")') },
             { name: 'Close button', locator: page.locator('button[data-testid="close-button"], [aria-label="Close"]') }
