@@ -112,7 +112,14 @@ async function createNewSession() {
 
     // Now launch the main ChatGPT browser
     console.log('Launching main browser process for ChatGPT...');
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({
+        headless: true,
+        args: [
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox',
+            '--disable-setuid-sandbox'
+        ]
+    });
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
@@ -239,6 +246,14 @@ async function createNewSession() {
 
     } catch (error) {
         console.error('An error occurred during account creation:', error);
+        try {
+            console.error('Current Page URL:', page.url());
+            console.error('Current Page Title:', await page.title());
+            const bodyText = await page.innerText('body').catch(() => '');
+            console.error('Page Body Text Snippet (first 800 chars):', bodyText.slice(0, 800));
+        } catch (diagErr) {
+            console.error('Failed to capture diagnostic page details:', diagErr.message);
+        }
         await page.screenshot({ path: 'wallpapers/error_signup.png', fullPage: true });
         await browser.close().catch(() => { });
         throw error;
